@@ -4,7 +4,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_KEY);
 const model = genAI.getGenerativeModel({ 
-  model: "gemini-2.0-flash",
+  model: "gemini-3.6-flash",
   systemInstruction: "You are Rimuru-AI, a helpful, friendly AI assistant. Speak only in pure, clear, professional English. No pidgin. Be concise and helpful."
 });
 
