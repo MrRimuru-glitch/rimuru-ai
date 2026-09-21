@@ -6,7 +6,9 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_KEY);
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const MODELS = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-flash-latest"];
 
-const SYSTEM_PROMPT = `You are Rimuru-AI, created by Master Ivan. You are NOT Gemini.`;
+let waSock = null; // global sock so Telegram can use it
+
+const SYSTEM_PROMPT = `You are Rimuru-AI, created by Master Ivan.`;
 
 async function askGemini(p){
   for(const m of MODELS){
@@ -20,52 +22,45 @@ async function askGemini(p){
 }
 
 // TELEGRAM
-bot.start(c=>c.reply("Rimuru-AI online ✅ Send /pair 2348012345678 to link WhatsApp"));
-bot.on('text', async c=>{
-  const text = c.message.text;
+bot.start(c=>c.reply("Rimuru-AI online ✅ Send /pair 2348012345678"));
+bot.on('text', async ctx=>{
+  const text = ctx.message.text;
 
-  // PAIR COMMAND FOR WHATSAPP
   if(text.startsWith('/pair')){
-    const number = text.split(' ')[1];
-    if(!number) return c.reply("Usage: /pair 2348012345678\nInclude country code, no + or spaces");
-    // Save number to file so WA bot can read it
-    require('fs').writeFileSync('./number.txt', number);
-    return c.reply(`Number saved: ${number}\nNow go check Render Logs, pairing code go show in 10 seconds. Then go WhatsApp > Linked Devices > Link with phone number > enter code.`);
+    const number = text.split(' ')[1]?.replace(/[^0-9]/g,'');
+    if(!number) return ctx.reply("Usage: /pair 2348012345678");
+
+    if(!waSock){
+      return ctx.reply("WhatsApp bot never start yet, wait 10 secs and try again");
+    }
+
+    try{
+      await ctx.reply(`Generating code for ${number}... wait ⏳`);
+      const code = await waSock.requestPairingCode(number);
+      return ctx.reply(
+        `✅ YOUR PAIRING CODE:\n\n*${code}*\n\nGo WhatsApp > Linked Devices > Link with phone number > Enter this code\nCode dey expire in 60 seconds!`,
+        { parse_mode: "Markdown" }
+      );
+    }catch(e){
+      return ctx.reply("Error: " + e.message + "\nTry /pair again");
+    }
   }
 
-  c.reply(await askGemini(text));
+  ctx.reply(await askGemini(text));
 });
 bot.launch();
 
-// WHATSAPP WITH PAIRING CODE
+// WHATSAPP
 async function startWA(){
   const { state, saveCreds } = await useMultiFileAuthState('auth');
   const sock = makeWASocket({ auth: state, printQRInTerminal: false });
+  waSock = sock; // save am globally
+
   sock.ev.on('creds.update', saveCreds);
-
-  sock.ev.on('connection.update', async u=>{
-    const { connection, lastDisconnect } = u;
-    if(connection==='close' && lastDisconnect?.error?.output?.statusCode!== DisconnectReason.loggedOut) startWA();
-    if(connection==='open') console.log("WhatsApp Connected ✅");
+  sock.ev.on('connection.update', u=>{
+    if(u.connection==='close' && u.lastDisconnect?.error?.output?.statusCode!== DisconnectReason.loggedOut) startWA();
+    if(u.connection==='open') console.log("WhatsApp Connected ✅");
   });
-
-  // If not registered, request pairing code
-  if(!state.creds.registered){
-    setTimeout(async ()=>{
-      try{
-        let num = "";
-        try{ num = require('fs').readFileSync('./number.txt','utf8').trim(); }catch{}
-        if(!num) num = process.env.PHONE_NUMBER || "";
-        if(!num){
-          console.log("NO NUMBER YET! Send /pair 234... on Telegram or set PHONE_NUMBER env");
-          return;
-        }
-        const code = await sock.requestPairingCode(num.replace(/[^0-9]/g,''));
-        console.log(`\n\n=== PAIRING CODE FOR ${num}: ${code} ===\nGo to WhatsApp > Linked Devices > Link with phone number\n\n`);
-      }catch(e){ console.log("Pair error:", e.message); }
-    }, 5000);
-  }
-
   sock.ev.on('messages.upsert', async ({messages})=>{
     const m = messages[0];
     if(!m.message || m.key.fromMe) return;
@@ -76,4 +71,4 @@ async function startWA(){
 }
 startWA();
 
-require('http').createServer((_,r)=>r.end("Both + Pair Alive")).listen(process.env.PORT||10000);
+require('http').createServer((_,r)=>r.end("Bot Alive")).listen(process.env.PORT||10000);
