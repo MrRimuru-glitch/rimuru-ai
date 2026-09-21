@@ -1,0 +1,10 @@
+{
+  "name": "rimuru-ai",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "commonjs",
+  "dependencies": {
+    "telegraf": "^4.15.0",
+    "@google/generative-ai": "^0.17.0"
+  }
+}
