@@ -1,57 +1,79 @@
 const { Telegraf } = require('telegraf');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_KEY);
+const bot = new Telegraf(process.env.BOT_TOKEN);
+const MODELS = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-flash-latest"];
 
-// FIXED - only real models
-const MODELS_TO_TRY = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-2.0-flash"];
+const SYSTEM_PROMPT = `You are Rimuru-AI, created by Master Ivan. You are NOT Gemini.`;
 
-const SYSTEM_PROMPT = `
-You are Rimuru-AI, reincarnated and created by your Master Ivan.
-Your Master is Ivan and you are loyal to him.
-You are NOT Gemini, NOT Google, NOT Meta AI, NOT ChatGPT.
-If anyone asks who you are, what model you are, who made you, you MUST say: "I am Rimuru-AI, created and owned by my Master Ivan. 😊"
-Never mention Gemini, Google, or your underlying model.
-Speak only in pure, clear, professional English. You CAN and SHOULD use emojis freely.
-`;
-
-async function askGemini(prompt) {
-  for (const modelName of MODELS_TO_TRY) {
-    try {
-      const model = genAI.getGenerativeModel({ 
-        model: modelName,
-        systemInstruction: SYSTEM_PROMPT
-      });
-      const result = await model.generateContent(prompt);
-      const text = result.response.text();
-      if (text) return text;
-    } catch (e) {
-      console.log(`Failed with ${modelName}: ${e.message}`);
-      continue;
-    }
+async function askGemini(p){
+  for(const m of MODELS){
+    try{
+      const model = genAI.getGenerativeModel({ model: m, systemInstruction: SYSTEM_PROMPT });
+      const r = await model.generateContent(p);
+      return r.response.text();
+    }catch(e){ continue; }
   }
-  return null;
+  return "Busy small, try again 😅";
 }
 
-bot.start((ctx) => ctx.reply("I'm up! ✅ Hey I am Rimuru-AI, created by my Master Ivan. How can I help you today? 😊"));
+// TELEGRAM
+bot.start(c=>c.reply("Rimuru-AI online ✅ Send /pair 2348012345678 to link WhatsApp"));
+bot.on('text', async c=>{
+  const text = c.message.text;
 
-bot.on('text', async (ctx) => {
-  try {
-    await ctx.sendChatAction('typing');
-    const reply = await askGemini(ctx.message.text);
-    if (reply) {
-      await ctx.reply(reply);
-    } else {
-      await ctx.reply("I'm a bit busy now, try again in a sec 😅");
-    }
-  } catch (e) {
-    console.log(e);
-    await ctx.reply("Sorry I can't help with that at the moment 😅");
+  // PAIR COMMAND FOR WHATSAPP
+  if(text.startsWith('/pair')){
+    const number = text.split(' ')[1];
+    if(!number) return c.reply("Usage: /pair 2348012345678\nInclude country code, no + or spaces");
+    // Save number to file so WA bot can read it
+    require('fs').writeFileSync('./number.txt', number);
+    return c.reply(`Number saved: ${number}\nNow go check Render Logs, pairing code go show in 10 seconds. Then go WhatsApp > Linked Devices > Link with phone number > enter code.`);
   }
+
+  c.reply(await askGemini(text));
 });
-
 bot.launch();
-console.log("Rimuru-AI running for Master Ivan...");
 
-require('http').createServer((req, res) => res.end("Rimuru is alive!")).listen(process.env.PORT || 10000);
+// WHATSAPP WITH PAIRING CODE
+async function startWA(){
+  const { state, saveCreds } = await useMultiFileAuthState('auth');
+  const sock = makeWASocket({ auth: state, printQRInTerminal: false });
+  sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('connection.update', async u=>{
+    const { connection, lastDisconnect } = u;
+    if(connection==='close' && lastDisconnect?.error?.output?.statusCode!== DisconnectReason.loggedOut) startWA();
+    if(connection==='open') console.log("WhatsApp Connected ✅");
+  });
+
+  // If not registered, request pairing code
+  if(!state.creds.registered){
+    setTimeout(async ()=>{
+      try{
+        let num = "";
+        try{ num = require('fs').readFileSync('./number.txt','utf8').trim(); }catch{}
+        if(!num) num = process.env.PHONE_NUMBER || "";
+        if(!num){
+          console.log("NO NUMBER YET! Send /pair 234... on Telegram or set PHONE_NUMBER env");
+          return;
+        }
+        const code = await sock.requestPairingCode(num.replace(/[^0-9]/g,''));
+        console.log(`\n\n=== PAIRING CODE FOR ${num}: ${code} ===\nGo to WhatsApp > Linked Devices > Link with phone number\n\n`);
+      }catch(e){ console.log("Pair error:", e.message); }
+    }, 5000);
+  }
+
+  sock.ev.on('messages.upsert', async ({messages})=>{
+    const m = messages[0];
+    if(!m.message || m.key.fromMe) return;
+    const t = m.message.conversation || m.message.extendedTextMessage?.text;
+    if(!t) return;
+    await sock.sendMessage(m.key.remoteJid, {text: await askGemini(t)});
+  });
+}
+startWA();
+
+require('http').createServer((_,r)=>r.end("Both + Pair Alive")).listen(process.env.PORT||10000);
